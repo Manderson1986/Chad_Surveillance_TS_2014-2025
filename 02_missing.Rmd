@@ -1,0 +1,518 @@
+---
+title: "02_Missing"
+author: "Margaret Anderson"
+date: "2026-06-09"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Libraries
+```{r}
+library(fpp3)
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(EpiReport)
+library(ggplot2)
+library(broom)
+library(lmtest)
+library(ggfortify)
+library(car)
+library(forecast)
+library(readxl)
+library(reshape2)
+library(openxlsx)
+library(magrittr)
+library(skimr)
+library(pacman)
+library(stringr)
+library(naniar)
+library(rio)
+library(here)
+library(flextable)
+library(officer)
+select <- dplyr::select 
+```
+
+Read in cleaned dataset for 2014 thru 2025
+```{r}
+surveillance_doi <- readRDS(here("5_RMD", "surveillance_doi.rds"))
+```
+
+STEP 1: Overall assessment of missingness patterns prior to remove of placeholder districts and mid-year activations for missingness analysis with no removal or assessment of placeholder districts - using the surveillance doi dataset
+```{r}
+surveillance_doi |>
+  group_by(AN, Week, Disease) |>
+  summarise(
+    PctMissing = mean(is.na(Cases)) * 100,
+    .groups = "drop"
+  ) |>
+  ggplot(aes(x = Week, y = AN, fill = PctMissing)) +
+  geom_tile() +
+  facet_wrap(~ Disease) +
+  scale_fill_gradient(low = "white", high = "red", name = "Missing %") +
+  scale_y_continuous(breaks = 2014:2025, expand = c(0, 0)) +
+  labs(
+    title = "S#: Missingness Heatmap by Week and Year Per Disease of Interest",
+    x = "Week",
+    y = "Year"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.text = element_text(color = "black", size = 8),
+    legend.title = element_text(color = "black", size = 8),
+    plot.title = element_text(color = "black", size = 8),
+    axis.title = element_text(color = "black", size = 8),
+    axis.text.y = element_text(color = "black", size = 6),
+    axis.text.x = element_text(color = "black", size = 8),
+    strip.text = element_text(color = "black", size = 8),
+    strip.background = element_blank()
+  )
+
+ggsave(here("6_visuals", "S1_missing_heatmapNPOPLACEHOLDERREMOVAL.pdf"), width = 10, height = 8, dpi = 300)
+```
+Step 2: Diagnosing districts with either 100 or near 100% missing, these were used as placeholders by the surveillance team, here we identify those. There are also mid-year activations of districts, we use >40% missing to identify those 
+```{r}
+#check for missing by disease, district, and year for those over 94% (placeholders)
+surveillance_doi |>
+  filter(Disease != "Guinea Worm") |>
+  group_by(AN, DISTRICT, Disease) |>
+  summarise(
+    PctMissing = mean(is.na(Cases)) * 100,
+    .groups = "drop"
+  ) |>
+  filter(PctMissing >= 94) |>
+  arrange(AN, DISTRICT, Disease) |> 
+  print(n = Inf)
+
+#check for missing by disease, district, and year for those over 40% (mid year activations)
+surveillance_doi |>
+  filter(Disease != "Guinea Worm") |>
+  group_by(AN, DISTRICT, Disease) |>
+  summarise(
+    PctMissing = mean(is.na(Cases)) * 100,
+    .groups = "drop"
+  ) |>
+  filter(PctMissing >= 40) |>
+  arrange(AN, DISTRICT, Disease) |> 
+  print(n = Inf)
+
+#finding from surveillance_doi is that we are not 100% missing in some diseases, we need to diagnose this, it is only the case in 2015
+surveillance_doi |>
+  filter(Disease != "Guinea Worm") |>
+  filter(DISTRICT %in% c("Djamane Mbarissou", "Gagal", "Koyom", "Lagon", "Torrock")) |>
+  filter(AN == 2015) |>
+  group_by(DISTRICT, Disease) |>
+  summarise(
+    PctMissing = mean(is.na(Cases)) * 100,
+    TotalCases = sum(Cases, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(DISTRICT, Disease)|> 
+  print(n = Inf)
+
+surveillance_doi |>
+  filter(Disease != "Guinea Worm") |>
+  filter(DISTRICT == "Bekourou") |>
+  filter(AN == 2015) |>
+  select(DISTRICT, AN, Week, Disease, Cases) |>
+  arrange(Disease, Week)|> 
+  print(n = Inf)
+
+surveillance_doi |>
+  filter(Disease != "Guinea Worm") |>
+  filter(DISTRICT == "Bekourou") |>
+  group_by(DISTRICT, AN, Disease) |>
+  summarise(
+    PctMissing = mean(is.na(Cases)) * 100,
+    TotalCases = sum(Cases, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  filter(PctMissing >= 80) |>
+  arrange(Disease, AN, DISTRICT)|> 
+  print(n = Inf)
+
+#conclusion from Bekourou diagnostic is that Bekourou was a placeholder 
+surveillance_doi |>
+  filter(Disease != "Guinea Worm") |>
+  filter(DISTRICT %in% c("Djamane Mbarissou", "Gagal", "Koyom", "Lagon", "Torrock")) |>
+  filter(AN == 2015) |>
+  select(DISTRICT, AN, Week, Disease, Cases) |>
+  arrange(DISTRICT, Disease, Week)
+
+#Check for Bekourou in 2014 - conclusion: not in 2014
+surveillance_doi |>
+  filter(DISTRICT == "Bekourou") |>
+  distinct(AN) |>
+  arrange(AN)|> 
+  print(n = Inf)
+
+#check what years we have for the 5 placeholder districts 
+surveillance_doi |>
+  filter(DISTRICT %in% c("Djamane Mbarissou", "Gagal", "Koyom", "Lagon", "Torrock")) |>
+  distinct(DISTRICT, AN) |>
+  arrange(DISTRICT, AN)|> 
+  print(n = Inf)
+
+surveillance_doi |> summarise(min(AN), max(AN))
+
+
+```
+
+STEP 3: Create Figures for Supplemental Material to show the mid-year missingness patterns for the 2016 mid-year activation districts. Excluded guinea worm due to high missing and complementary surveillance program via Carter Center 
+
+# ============================================================
+# Figure S#: Weekly Cases by Disease — 2016 Mid-Year Activation Districts
+# Supplemental Figure for methods transparency
+# ============================================================
+
+```{r}
+##Diagnose mid-year exclusions 
+surveillance_doi |>
+  filter(Disease != "Guinea Worm") |>
+  filter(!(DISTRICT %in% c("Djamane Mbarissou", "Gagal", "Koyom", "Lagon", "Torrock") & AN == 2015)) |>
+  filter(!(DISTRICT == "Bekourou" & AN %in% c(2015, 2016, 2017))) |>
+  group_by(DISTRICT, AN, Disease) |>
+  summarise(
+    FirstNonNA_Week = min(Week[!is.na(Cases)], na.rm = TRUE),
+    LastNonNA_Week = max(Week[!is.na(Cases)], na.rm = TRUE),
+    PctMissing = mean(is.na(Cases)) * 100,
+    .groups = "drop"
+  ) |>
+  filter(FirstNonNA_Week > 5) |>
+  arrange(AN, DISTRICT, Disease) |>
+  print(n = Inf)
+
+###### Visualize the mid-year missingness patterns for the affected districts
+# Step 1: identify the 2016 mid-year districts
+midyear_2016_districts <- surveillance_doi |>
+  filter(Disease != "Guinea Worm", AN == 2016) |>
+  filter(!(DISTRICT == "Bekourou")) |>
+  group_by(DISTRICT, Disease) |>
+  summarise(
+    FirstNonNA_Week = min(Week[!is.na(Cases)], na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  filter(FirstNonNA_Week > 5) |>
+  distinct(DISTRICT) |>
+  pull(DISTRICT)
+
+# Step 2: visualize week by week across diseases for these districts
+surveillance_doi |>
+  filter(
+    AN == 2016,
+    DISTRICT %in% midyear_2016_districts,
+    Disease != "Guinea Worm"
+  ) |>
+  ggplot(aes(x = Week, y = Cases, color = Disease)) +
+  geom_line(na.rm = TRUE) +
+  geom_point(size = 1, na.rm = TRUE) +
+  facet_wrap(~ DISTRICT, scales = "free_y") +
+  geom_vline(xintercept = 26, linetype = "dashed", color = "grey50") +
+  geom_vline(xintercept = 22, linetype = "dashed", color = "grey50") +
+  geom_vline(xintercept = 28, linetype = "dashed", color = "grey50") +
+  geom_vline(xintercept = 33, linetype = "dashed", color = "grey50") +
+  labs(
+    title = "2016 Mid-Year Districts: Weekly Cases by Disease",
+    x = "Week",
+    y = "Cases",
+    color = "Disease"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+#pull first nonNA malaria week for each district in 2016, based on visual above malaria shows a lag, no other diseases reported
+surveillance_doi |>
+  filter(
+    AN == 2016,
+    DISTRICT %in% midyear_2016_districts,
+    Disease == "Malaria"
+  ) |>
+  group_by(DISTRICT) |>
+  summarise(
+    FirstNonNA_Week_Malaria = min(Week[!is.na(Cases)], na.rm = TRUE),
+    FirstCase_Week_Malaria = min(Week[!is.na(Cases) & Cases > 0], na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(FirstNonNA_Week_Malaria) |>
+  print(n = Inf)
+#plot Daffra because reporting seems to start at 18, but first case appears at week 37 
+surveillance_doi |>
+  filter(
+    AN == 2016,
+    DISTRICT == "Daffra",
+    Disease == "Malaria"
+  ) |>
+  ggplot(aes(x = Week, y = Cases)) +
+  geom_line(na.rm = TRUE) +
+  geom_point(size = 2, na.rm = TRUE) +
+  geom_vline(xintercept = 18, linetype = "dashed", color = "blue") +
+  geom_vline(xintercept = 37, linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 34, linetype = "dashed", color = "purple") +
+  labs(
+    title = "Daffra 2016 - Malaria Weekly Cases",
+    subtitle = "Blue = Week 18 (first non-NA), Red = Week 37 (first case > 0)",
+    x = "Week",
+    y = "Cases"
+  ) +
+  theme_minimal()
+
+# Clean up visualizations 
+# Create object for first case week marker for cleaned up visualizations restricted to districts of interest based on missing patters above 
+library(patchwork)
+midyear_2016 <- c("Alifa", "Assinet", "Michemire", "Salal", "Daffra", "Youe")
+#create first week marker object 
+first_case_week <- surveillance_doi |>
+  filter(
+    AN == 2016,
+    DISTRICT %in% midyear_2016,
+    Disease == "Malaria"
+  ) |>
+  group_by(DISTRICT) |>
+  summarise(
+    FirstCase_Week_Malaria = min(Week[!is.na(Cases) & Cases > 0], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+first_case_week <- surveillance_doi |>
+  filter(
+    AN == 2016,
+    DISTRICT %in% midyear_2016,
+    Disease == "Malaria"
+  ) |>
+  group_by(DISTRICT) |>
+  summarise(
+    FirstCase_Week_Malaria = min(Week[!is.na(Cases) & Cases > 0], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+surveillance_doi |>
+  filter(
+    AN == 2016,
+    DISTRICT %in% midyear_2016,
+    Disease != "Guinea Worm"
+  ) |>
+  ggplot(aes(x = Week, y = Cases, color = Disease)) +
+  geom_line(linewidth = 0.4, na.rm = TRUE) +
+  geom_point(size = 1, na.rm = TRUE) +
+  geom_vline(
+    data        = first_case_week,
+    aes(xintercept = FirstCase_Week_Malaria),
+    linetype    = "dashed",
+    color       = "gray50",
+    linewidth   = 0.5,
+    inherit.aes = FALSE
+  ) +
+  facet_wrap(~ DISTRICT, scales = "free_y", ncol = 2) +
+  labs(
+    title = "Figure S#: 2016 Mid-Year Activation Districts: Weekly Cases by Disease",
+    x     = "Week",
+    y     = "Cases",
+    color = "Disease"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position  = "bottom",
+    legend.text      = element_text(color = "black", size = 8),
+    legend.title     = element_text(color = "black", size = 8),
+    plot.title       = element_text(color = "black", size = 8),
+    axis.title       = element_text(color = "black", size = 8),
+    axis.text        = element_text(color = "black", size = 8),
+    axis.line        = element_line(size = 0.05, colour = "black"),
+    axis.ticks       = element_line(size = 0.05, colour = "black"),
+    strip.text       = element_text(color = "black", size = 8),
+    strip.background = element_blank(), 
+    panel.grid.major  = element_line(color = "gray90", linewidth = 0.3),
+    panel.grid.minor  = element_line(color = "gray95", linewidth = 0.2)
+  )
+
+ggsave(here("6_visuals", "S2_midyeardistricts.pdf"), width = 10, height = 8, dpi = 300)
+```
+
+STEP #4: Create clean dataset with placeholder districts removed and mid year activations adjusted for 
+===========================================
+Supplemental Figure: Second heat map for appendix that excludes placeholder and mid-year activations for missing analysis (placed here but the code that follows in the two chunks after is the diagnostic used to assess for district placeholders)
+===========================================
+```{r}
+# Define full exclusions by year
+full_exclusions_2015 <- c("Djamane Mbarissou", "Gagal", "Koyom", "Lagon", "Torrock", "Bekourou")
+full_exclusions_2016_2017 <- c("Bekourou")
+
+# Define full exclusion across years
+surveillance_doi |> 
+  filter(DISTRICT == "Isserom") |> distinct(AN) |> arrange(AN)
+nonfunctional_exclusion <- c("Isserom")
+
+# Define mid-year activation start weeks (for 2016)
+midyear_activations_2016 <- tibble(
+  DISTRICT = c("Alifa", "Assinet", "Michemire", "Salal", "Daffra"),
+  StartWeek = c(33, 33, 33, 33, 37)
+)
+
+# Apply exclusions and mid-year activation filtering
+surveillance_doi_clean <- surveillance_doi |>
+  # Remove full placeholder exclusions by year
+  filter(!(DISTRICT %in% full_exclusions_2015 & AN == 2015)) |>
+  filter(!(DISTRICT %in% full_exclusions_2016_2017 & AN %in% c(2016, 2017))) |>
+  # Remove non-functional site
+  filter(!DISTRICT %in% nonfunctional_exclusion) |>
+  # Apply mid-year activation cutoffs for 2016
+  left_join(midyear_activations_2016, by = "DISTRICT") |>
+  filter(
+    is.na(StartWeek) |        # not a mid-year activation district, keep all
+    AN != 2016 |              # not in 2016, keep all
+    Week >= StartWeek         # in 2016, only keep from activation week onward
+  ) |>
+  select(-StartWeek)          # drop my helper column
+```
+
+STEP ## # Create heatmap with cleaned data
+# Assessment of missingness patterns - excluding placeholder districts and mid-year activations
+```{r}
+missingness_heatmap_clean <- surveillance_doi_clean |>
+  group_by(AN, Week, Disease) |>
+  summarise(
+    PctMissing = mean(is.na(Cases)) * 100,
+    .groups = "drop"
+  ) |>
+  ggplot(aes(x = Week, y = AN, fill = PctMissing)) +
+  geom_tile() +
+  facet_wrap(~ Disease) +
+  scale_fill_gradient(low = "white", high = "red", name = "% Missing") +
+  scale_y_continuous(breaks = 2014:2025, expand = c(0, 0)) +
+  labs(
+    title = "S#: Missingness Heatmap by Week and Year Per Disease of Interest (Excl. Placeholder Districts & Mid-Year Activations)",
+    x = "Week",
+    y = "Year"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.text      = element_text(color = "black", size = 8),
+    legend.title     = element_text(color = "black", size = 8),
+    plot.title       = element_text(color = "black", size = 8),
+    axis.title       = element_text(color = "black", size = 8),
+    axis.text.y      = element_text(color = "black", size = 6),
+    axis.text.x      = element_text(color = "black", size = 8),
+    strip.text       = element_text(color = "black", size = 8),
+    strip.background = element_blank()
+  )
+
+ggsave(here("6_visuals", "S2_missingness_heatmap_clean.pdf"), width = 10, height = 8, dpi = 300)
+# Print to viewer
+
+print(missingness_heatmap_clean)
+
+
+```
+
+STEP #4: Calculate missingness percentages with placeholder districts removed
+===================================
+Supplmental Table: Missingness Summary Table by Disease and Year with Placeholder Districts Removed by using surveillance_doi_clean dataset (for appendix)
+===================================================
+```{r}
+#percent missing overall across all 12 years calculation excluding guinea worm
+surveillance_doi_clean |>
+  filter(Disease != "Guinea Worm") |>        # exclude Guinea Worm
+  group_by(Disease, AN) |>
+  miss_var_summary() |>
+  filter(variable == "Cases") |>
+  select(Disease, AN, pct_miss) |>
+  mutate(pct_miss = round(pct_miss, 1)) |>
+  ungroup() |>
+  summarize(avg_pct_miss = round(mean(pct_miss), 1))
+
+#percent missing overall across all 12 years calculation including guinea worm 
+surveillance_doi_clean |>
+  group_by(Disease, AN) |>
+  miss_var_summary() |>
+  filter(variable == "Cases") |>
+  select(Disease, AN, pct_miss) |>
+  mutate(pct_miss = round(pct_miss, 1)) |>
+  ungroup() |>
+  summarize(avg_pct_miss = round(mean(pct_miss), 1))
+```
+
+Additional investigation of missing in 2025 given it is higher than all prior years
+```{r}
+
+miss_var_summary(surveillance_doi_clean)
+
+surveillance_doi_clean |>
+  filter(AN == 2025) |>
+  group_by(Disease) |>
+  miss_var_summary() |>
+  filter(variable == "Cases") |>
+  arrange(desc(pct_miss)) |>
+  print(n = Inf)
+
+# By district — is it specific reporting units dropping out?
+surveillance_doi_clean |>
+  filter(Disease != "Guinea Worm") |>
+  filter(AN == 2025) |>
+  group_by(DISTRICT) |>
+  miss_var_summary() |>
+  filter(variable == "Cases") |>
+  arrange(desc(pct_miss)) |>
+  print(n = Inf)
+
+# By week — is it system-wide gaps in particular weeks?
+surveillance_doi_clean |>
+  filter(Disease != "Guinea Worm") |>
+  filter(AN == 2025) |>
+  group_by(Week) |>
+  miss_var_summary() |>
+  filter(variable == "Cases") |>
+  arrange(desc(pct_miss)) |>
+  print(n = Inf)
+
+# By high frequency week above - is it disease specific in these weeks? 
+surveillance_doi_clean |>
+  filter(AN == 2025, Disease != "Guinea Worm", Week %in% c(27, 35)) |>
+  group_by(Week, Disease) |>
+  summarise(
+    n_miss = sum(is.na(Cases)),
+    n_total = n(),
+    pct_miss = mean(is.na(Cases)) * 100,
+    .groups = "drop"
+  ) |>
+  arrange(Week, desc(n_miss)) |>
+  print(n = Inf)
+
+```
+
+STEP 4 Continued: appendix summary of missing values for all disease across years 
+
+```{r}
+miss_table <- surveillance_doi_clean |>
+  group_by(Disease, AN) |>
+  miss_var_summary() |>
+  filter(variable == "Cases") |>
+  ungroup() |>
+  select(Disease, AN, pct_miss) |>
+  mutate(pct_miss = round(pct_miss, 1)) |>
+  pivot_wider(names_from = AN, values_from = pct_miss) |>
+  arrange(Disease)
+
+ft_miss <- flextable(miss_table) |>
+  set_header_labels(Disease = "Disease") |>
+  colformat_double(digits = 1) |>
+  theme_booktabs() |>
+  bold(part = "header") |>
+  align(align = "center", part = "all") |>
+  align(j = "Disease", align = "left", part = "all") |>
+  fontsize(size = 8, part = "all") |>
+  width(j = "Disease", width = 1.6) |>
+  width(j = 2:ncol(miss_table), width = 0.45)
+ft_miss
+doc <- read_docx() |>
+  body_add_par("Table S#. Percentage of Missing Cases by Disease and Year", style = "heading 2") |>
+  body_add_flextable(ft_miss)
+
+print(doc, target = here("6_visuals", "TableS_Missingness_by_Disease_Year.docx"))
+```
+
+
